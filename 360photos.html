@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VR Scalable 360° Photo Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Arial', sans-serif;
+            background: #000;
+            overflow: hidden;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        .loading-indicator {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            color: white;
+            font-size: 16px;
+            z-index: 2000;
+            display: none;
+            text-align: center;
+        }
+        
+        .loading-spinner {
+            border: 3px solid #333;
+            border-top: 3px solid #00ff88;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .vr-info {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            z-index: 1000;
+        }
+        
+        .performance-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            z-index: 1000;
+        }
+        
+        /* Hide panels in VR mode */
+        @media (display-mode: fullscreen) {
+            .vr-info, .performance-panel {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    
+    <div class="loading-indicator" id="loadingIndicator">
+        <div class="loading-spinner"></div>
+        <div id="loadingText">Loading panorama...</div>
+    </div>
+    
+    <div class="vr-info">
+        <div id="currentLocation">Loading...</div>
+        <div style="font-size: 11px; color: #ccc; margin-top: 5px;">
+            Look around and click green buttons to navigate
+        </div>
+    </div>
+    
+    <div class="performance-panel">
+        <div>Cache: <span id="textureCount">0/20</span></div>
+        <div>FPS: <span id="fps">60</span></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        class ScalableVRPanoramaViewer {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.currentSphere = null;
+                this.textureCache = new Map();
+                this.maxCacheSize = 20; // Increased for larger datasets
+                this.currentIndex = 0;
+                this.adjacencyList = new Map();
+                this.navigationButtons = [];
+                this.loadingQueue = new Set();
+                
+                // VR-optimized controls
+                this.controls = {
+                    isMouseDown: false,
+                    mouseX: 0,
+                    mouseY: 0,
+                    lon: 0,
+                    lat: 0,
+                    targetLon: 0,
+                    targetLat: 0
+                };
+                
+                this.performanceStats = {
+                    fps: 60,
+                    lastTime: performance.now(),
+                    frameCount: 0
+                };
+                
+                // This will be loaded from external JSON in production
+                this.panoramaData = null;
+            }
+            
+            // Load panorama data from external source (scalable approach)
+            async loadPanoramaData(dataUrl = null) {
+                if (dataUrl) {
+                    try {
+                        const response = await fetch(dataUrl);
+                        this.panoramaData = await response.json();
+                    } catch (error) {
+                        console.warn('Failed to load external data, using sample data');
+                        this.panoramaData = this.getSampleData();
+                    }
+                } else {
+                    this.panoramaData = this.getSampleData();
+                }
+                
+                this.buildAdjacencyGraph();
+            }
+            
+            // Sample data structure (replace with your JSON file)
+            getSampleData() {
+                return {
+                    panoramas: [
+                        {
+                            id: 0,
+                            name: "Central Hub",
+                            url: "360_1.jpg",
+                            description: "Main starting point",
+                            coordinates: { lat: 40.7128, lng: -74.0060 },
+                            tags: ["center"],
+                            color: "#2196f3"
+                        },
+                        {
+                            id: 1,
+                            name: "North View",
+                            url: "360_2.jpg",
+                            description: "Northern perspective",
+                            coordinates: { lat: 40.7138, lng: -74.0060 },
+                            tags: ["north"],
+                            color: "#f44336"
+                        },
+                        {
+                            id: 2,
+                            name: "East View",
+                            url: "360_3.jpg",
+                            description: "Eastern perspective",
+                            coordinates: { lat: 40.7128, lng: -74.0050 },
+                            tags: ["east"],
+                            color: "#4caf50"
+                        },
+                        {
+                            id: 3,
+                            name: "South View",
+                            url: "360_4.jpg",
+                            description: "Southern perspective",
+                            coordinates: { lat: 40.7118, lng: -74.0060 },
+                            tags: ["south"],
+                            color: "#ff9800"
+                        },
+                        {
+                            id: 4,
+                            name: "West View",
+                            url: "360_5.jpg",
+                            description: "Western perspective",
+                            coordinates: { lat: 40.7128, lng: -74.0070 },
+                            tags: ["west"],
+                            color: "#9c27b0"
+                        }
+                    ],
+                    connections: [
+                        { from: 0, to: 1, position: { x: 0, y: 50, z: -200 }, label: "NORTH" },
+                        { from: 0, to: 2, position: { x: 200, y: 50, z: 0 }, label: "EAST" },
+                        { from: 0, to: 3, position: { x: 0, y: 50, z: 200 }, label: "SOUTH" },
+                        { from: 0, to: 4, position: { x: -200, y: 50, z: 0 }, label: "WEST" },
+                        { from: 1, to: 0, position: { x: 0, y: 50, z: 200 }, label: "BACK" },
+                        { from: 2, to: 0, position: { x: -200, y: 50, z: 0 }, label: "BACK" },
+                        { from: 3, to: 0, position: { x: 0, y: 50, z: -200 }, label: "BACK" },
+                        { from: 4, to: 0, position: { x: 200, y: 50, z: 0 }, label: "BACK" }
+                    ]
+                };
+            }
+            
+            buildAdjacencyGraph() {
+                this.panoramaData.connections.forEach(conn => {
+                    if (!this.adjacencyList.has(conn.from)) {
+                        this.adjacencyList.set(conn.from, []);
+                    }
+                    this.adjacencyList.get(conn.from).push(conn);
+                });
+            }
+            
+            async init(container, dataUrl = null) {
+                await this.loadPanoramaData(dataUrl);
+                this.setupThreeJS(container);
+                this.setupVRControls();
+                this.startPerformanceMonitoring();
+                await this.loadPanorama(0);
+                this.animate();
+            }
+            
+            setupThreeJS(container) {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                container.appendChild(this.renderer.domElement);
+                
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+            }
+            
+            async loadTexture(url, id) {
+                if (this.textureCache.has(id)) {
+                    this.moveToFront(id);
+                    return this.textureCache.get(id);
+                }
+                
+                if (this.loadingQueue.has(id)) {
+                    return new Promise(resolve => {
+                        const checkLoading = () => {
+                            if (this.textureCache.has(id)) {
+                                resolve(this.textureCache.get(id));
+                            } else {
+                                setTimeout(checkLoading, 100);
+                            }
+                        };
+                        checkLoading();
+                    });
+                }
+                
+                this.loadingQueue.add(id);
+                
+                return new Promise((resolve, reject) => {
+                    const loader = new THREE.TextureLoader();
+                    loader.setCrossOrigin('anonymous');
+                    
+                    loader.load(
+                        url,
+                        (texture) => {
+                            this.addToCache(id, texture);
+                            this.loadingQueue.delete(id);
+                            resolve(texture);
+                        },
+                        undefined,
+                        (error) => {
+                            console.warn(`Failed to load texture ${id}, using fallback`);
+                            const fallback = this.createFallbackTexture(this.panoramaData.panoramas[id].color);
+                            this.addToCache(id, fallback);
+                            this.loadingQueue.delete(id);
+                            resolve(fallback);
+                        }
+                    );
+                });
+            }
+            
+            addToCache(id, texture) {
+                if (this.textureCache.size >= this.maxCacheSize) {
+                    const firstKey = this.textureCache.keys().next().value;
+                    const oldTexture = this.textureCache.get(firstKey);
+                    if (oldTexture.dispose) oldTexture.dispose();
+                    this.textureCache.delete(firstKey);
+                }
+                this.textureCache.set(id, texture);
+            }
+            
+            moveToFront(id) {
+                const texture = this.textureCache.get(id);
+                this.textureCache.delete(id);
+                this.textureCache.set(id, texture);
+            }
+            
+            createFallbackTexture(color) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 1024;
+                canvas.height = 512;
+                const ctx = canvas.getContext('2d');
+                
+                const gradient = ctx.createRadialGradient(512, 256, 0, 512, 256, 400);
+                gradient.addColorStop(0, '#ffffff');
+                gradient.addColorStop(0.5, color);
+                gradient.addColorStop(1, '#222222');
+                
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, 1024, 512);
+                
+                // Add pattern
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                for (let i = 0; i < 100; i++) {
+                    ctx.beginPath();
+                    ctx.arc(Math.random() * 1024, Math.random() * 512, Math.random() * 5 + 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                return new THREE.CanvasTexture(canvas);
+            }
+            
+            async loadPanorama(index) {
+                if (index < 0 || index >= this.panoramaData.panoramas.length) return;
+                
+                const panorama = this.panoramaData.panoramas[index];
+                this.showLoadingIndicator(true, `Loading ${panorama.name}...`);
+                
+                try {
+                    const texture = await this.loadTexture(panorama.url, index);
+                    this.displayPanorama(texture, index);
+                    this.preloadAdjacent(index);
+                    this.updateUI(index);
+                    this.currentIndex = index;
+                } catch (error) {
+                    console.error('Error loading panorama:', error);
+                } finally {
+                    this.showLoadingIndicator(false);
+                }
+            }
+            
+            displayPanorama(texture, index) {
+                // Clean up current sphere and buttons
+                this.cleanupScene();
+                
+                // Create panorama sphere
+                const geometry = new THREE.SphereGeometry(500, 60, 40);
+                geometry.scale(-1, 1, 1);
+                const material = new THREE.MeshBasicMaterial({ map: texture });
+                this.currentSphere = new THREE.Mesh(geometry, material);
+                this.scene.add(this.currentSphere);
+                
+                // Add 3D navigation buttons
+                this.add3DNavigationButtons(index);
+            }
+            
+            add3DNavigationButtons(currentIndex) {
+                const connections = this.adjacencyList.get(currentIndex) || [];
+                
+                connections.forEach((conn, i) => {
+                    const button = this.create3DButton(conn.label, conn.to);
+                    button.position.set(conn.position.x, conn.position.y, conn.position.z);
+                    
+                    // Make button face camera properly - always upright
+                    const direction = new THREE.Vector3();
+                    direction.subVectors(new THREE.Vector3(0, 0, 0), button.position).normalize();
+                    
+                    // Create proper rotation matrix to face camera but stay upright
+                    const up = new THREE.Vector3(0, 1, 0);
+                    const right = new THREE.Vector3();
+                    right.crossVectors(up, direction).normalize();
+                    const realUp = new THREE.Vector3();
+                    realUp.crossVectors(direction, right).normalize();
+                    
+                    const matrix = new THREE.Matrix4();
+                    matrix.makeBasis(right, realUp, direction);
+                    button.setRotationFromMatrix(matrix);
+                    
+                    this.scene.add(button);
+                    this.navigationButtons.push(button);
+                    
+                    // Only add subtle pulsing, no floating
+                    this.animateButton(button, i);
+                });
+            }
+            
+            create3DButton(label, targetIndex) {
+                const group = new THREE.Group();
+                
+                // Button background (rounded rectangle)
+                const buttonGeometry = new THREE.PlaneGeometry(80, 30);
+                const buttonMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x00ff88,
+                    transparent: true,
+                    opacity: 0.9,
+                    side: THREE.DoubleSide
+                });
+                const buttonMesh = new THREE.Mesh(buttonGeometry, buttonMaterial);
+                group.add(buttonMesh);
+                
+                // Button border
+                const borderGeometry = new THREE.PlaneGeometry(84, 34);
+                const borderMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x00aa66,
+                    transparent: true,
+                    opacity: 0.6,
+                    side: THREE.DoubleSide
+                });
+                const borderMesh = new THREE.Mesh(borderGeometry, borderMaterial);
+                borderMesh.position.z = -0.1;
+                group.add(borderMesh);
+                
+                // Button text (using canvas texture)
+                const canvas = document.createElement('canvas');
+                canvas.width = 256;
+                canvas.height = 128;
+                const ctx = canvas.getContext('2d');
+                
+                // Clear and style
+                ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+                ctx.fillRect(0, 0, 256, 128);
+                ctx.fillStyle = '#000000';
+                ctx.font = 'bold 32px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                // Draw text
+                ctx.fillText(label, 128, 64);
+                
+                const textTexture = new THREE.CanvasTexture(canvas);
+                const textMaterial = new THREE.MeshBasicMaterial({ 
+                    map: textTexture, 
+                    transparent: true 
+                });
+                const textMesh = new THREE.Mesh(buttonGeometry, textMaterial);
+                textMesh.position.z = 0.1;
+                group.add(textMesh);
+                
+                // Store target info
+                group.userData = {
+                    isNavigationButton: true,
+                    targetPanorama: targetIndex,
+                    originalColor: 0x00ff88,
+                    hoverColor: 0x00ffff,
+                    buttonMaterial: buttonMaterial
+                };
+                
+                return group;
+            }
+            
+            animateButton(button, index) {
+                const startTime = Date.now() + (index * 200); // Stagger animations
+                
+                const animate = () => {
+                    if (!button.parent) return;
+                    
+                    const elapsed = (Date.now() - startTime) * 0.001;
+                    
+                    // Only subtle pulsing glow - no movement or rotation
+                    const material = button.userData.buttonMaterial;
+                    if (material) {
+                        material.opacity = 0.85 + 0.15 * Math.sin(elapsed * 2);
+                    }
+                    
+                    requestAnimationFrame(animate);
+                };
+                animate();
+            }
+            
+            cleanupScene() {
+                // Remove current sphere
+                if (this.currentSphere) {
+                    this.scene.remove(this.currentSphere);
+                    this.currentSphere.geometry.dispose();
+                    this.currentSphere.material.dispose();
+                }
+                
+                // Remove navigation buttons
+                this.navigationButtons.forEach(button => {
+                    this.scene.remove(button);
+                    button.traverse(child => {
+                        if (child.geometry) child.geometry.dispose();
+                        if (child.material) {
+                            if (child.material.map) child.material.map.dispose();
+                            child.material.dispose();
+                        }
+                    });
+                });
+                this.navigationButtons = [];
+            }
+            
+            preloadAdjacent(currentIndex) {
+                const connections = this.adjacencyList.get(currentIndex) || [];
+                connections.forEach(conn => {
+                    if (!this.textureCache.has(conn.to)) {
+                        this.loadTexture(this.panoramaData.panoramas[conn.to].url, conn.to)
+                            .catch(err => console.warn(`Preload failed for ${conn.to}:`, err));
+                    }
+                });
+            }
+            
+            setupVRControls() {
+                const container = this.renderer.domElement;
+                
+                // Mouse/touch controls with smooth interpolation
+                container.addEventListener('mousedown', (e) => {
+                    this.controls.isMouseDown = true;
+                    this.controls.mouseX = e.clientX;
+                    this.controls.mouseY = e.clientY;
+                });
+                
+                container.addEventListener('mousemove', (e) => {
+                    if (!this.controls.isMouseDown) return;
+                    
+                    this.controls.targetLon -= (e.clientX - this.controls.mouseX) * 0.1;
+                    this.controls.targetLat += (e.clientY - this.controls.mouseY) * 0.1;
+                    this.controls.targetLat = Math.max(-85, Math.min(85, this.controls.targetLat));
+                    
+                    this.controls.mouseX = e.clientX;
+                    this.controls.mouseY = e.clientY;
+                });
+                
+                container.addEventListener('mouseup', () => {
+                    this.controls.isMouseDown = false;
+                });
+                
+                // Touch controls for mobile VR
+                container.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 1) {
+                        this.controls.isMouseDown = true;
+                        this.controls.mouseX = e.touches[0].clientX;
+                        this.controls.mouseY = e.touches[0].clientY;
+                    }
+                });
+                
+                container.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    if (!this.controls.isMouseDown || e.touches.length !== 1) return;
+                    
+                    this.controls.targetLon -= (e.touches[0].clientX - this.controls.mouseX) * 0.1;
+                    this.controls.targetLat += (e.touches[0].clientY - this.controls.mouseY) * 0.1;
+                    this.controls.targetLat = Math.max(-85, Math.min(85, this.controls.targetLat));
+                    
+                    this.controls.mouseX = e.touches[0].clientX;
+                    this.controls.mouseY = e.touches[0].clientY;
+                });
+                
+                container.addEventListener('touchend', () => {
+                    this.controls.isMouseDown = false;
+                });
+                
+                // Click/tap for navigation
+                container.addEventListener('click', (e) => this.onContainerClick(e));
+                
+                // Keyboard controls
+                document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Space') {
+                        e.preventDefault();
+                        this.loadPanorama(0); // Return to center
+                    }
+                });
+            }
+            
+            onContainerClick(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.navigationButtons, true);
+                
+                if (intersects.length > 0) {
+                    let button = intersects[0].object;
+                    while (button && !button.userData.isNavigationButton) {
+                        button = button.parent;
+                    }
+                    
+                    if (button && button.userData.isNavigationButton) {
+                        // Button click effect
+                        this.animateButtonClick(button);
+                        
+                        // Navigate to target panorama
+                        setTimeout(() => {
+                            this.loadPanorama(button.userData.targetPanorama);
+                        }, 200);
+                    }
+                }
+            }
+            
+            animateButtonClick(button) {
+                const originalScale = button.scale.clone();
+                const material = button.userData.buttonMaterial;
+                const originalColor = material.color.getHex();
+                
+                // Scale and color animation
+                button.scale.multiplyScalar(1.2);
+                material.color.setHex(button.userData.hoverColor);
+                
+                setTimeout(() => {
+                    button.scale.copy(originalScale);
+                    material.color.setHex(originalColor);
+                }, 200);
+            }
+            
+            updateUI(index) {
+                const panorama = this.panoramaData.panoramas[index];
+                document.getElementById('currentLocation').textContent = 
+                    `${panorama.name} - ${panorama.description}`;
+            }
+            
+            showLoadingIndicator(show, text = 'Loading panorama...') {
+                const indicator = document.getElementById('loadingIndicator');
+                const loadingText = document.getElementById('loadingText');
+                indicator.style.display = show ? 'block' : 'none';
+                if (loadingText) loadingText.textContent = text;
+            }
+            
+            startPerformanceMonitoring() {
+                setInterval(() => {
+                    document.getElementById('textureCount').textContent = 
+                        `${this.textureCache.size}/${this.maxCacheSize}`;
+                    document.getElementById('fps').textContent = Math.round(this.performanceStats.fps);
+                }, 1000);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Smooth camera interpolation
+                this.controls.lon += (this.controls.targetLon - this.controls.lon) * 0.1;
+                this.controls.lat += (this.controls.targetLat - this.controls.lat) * 0.1;
+                
+                // Update FPS
+                const now = performance.now();
+                this.performanceStats.frameCount++;
+                if (now - this.performanceStats.lastTime >= 1000) {
+                    this.performanceStats.fps = this.performanceStats.frameCount;
+                    this.performanceStats.frameCount = 0;
+                    this.performanceStats.lastTime = now;
+                }
+                
+                // Update camera
+                const lat = Math.max(-85, Math.min(85, this.controls.lat));
+                const phi = THREE.MathUtils.degToRad(90 - lat);
+                const theta = THREE.MathUtils.degToRad(this.controls.lon);
+                
+                this.camera.position.x = 0.1 * Math.sin(phi) * Math.cos(theta);
+                this.camera.position.y = 0.1 * Math.cos(phi);
+                this.camera.position.z = 0.1 * Math.sin(phi) * Math.sin(theta);
+                this.camera.lookAt(this.scene.position);
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            // Method to dynamically load new panorama sets
+            async loadNewDataset(dataUrl) {
+                this.showLoadingIndicator(true, 'Loading new dataset...');
+                await this.loadPanoramaData(dataUrl);
+                await this.loadPanorama(0);
+                this.showLoadingIndicator(false);
+            }
+            
+            dispose() {
+                this.textureCache.forEach(texture => {
+                    if (texture.dispose) texture.dispose();
+                });
+                this.textureCache.clear();
+                this.cleanupScene();
+                
+                if (this.renderer) {
+                    this.renderer.dispose();
+                }
+            }
+        }
+        
+        // Initialize the VR panorama viewer
+        let vrViewer;
+        
+        window.addEventListener('load', async () => {
+            const container = document.getElementById('container');
+            vrViewer = new ScalableVRPanoramaViewer();
+            
+            // You can pass a URL to external JSON data:
+            // await vrViewer.init(container, './panorama-data.json');
+            await vrViewer.init(container);
+        });
+        
+        // Cleanup
+        window.addEventListener('beforeunload', () => {
+            if (vrViewer) vrViewer.dispose();
+        });
+        
+        // Handle resize
+        window.addEventListener('resize', () => {
+            if (vrViewer) {
+                vrViewer.camera.aspect = window.innerWidth / window.innerHeight;
+                vrViewer.camera.updateProjectionMatrix();
+                vrViewer.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+        
+        // Example function to load different datasets
+        async function loadNewLocation(dataUrl) {
+            if (vrViewer) {
+                await vrViewer.loadNewDataset(dataUrl);
+            }
+        }
+    </script>
+</body>
+</html>
