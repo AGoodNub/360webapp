@@ -102,6 +102,49 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/webxr/VRButton.js"></script>
+    <script>
+        // Import VRButton from Three.js examples
+        if (typeof VRButton === 'undefined') {
+            // Fallback implementation if VRButton is not available
+            window.VRButton = {
+                createButton: function(renderer) {
+                    const button = document.createElement('button');
+                    button.style.position = 'absolute';
+                    button.style.bottom = '20px';
+                    button.style.left = '50%';
+                    button.style.transform = 'translateX(-50%)';
+                    button.style.padding = '12px 24px';
+                    button.style.background = '#00ff88';
+                    button.style.color = '#000';
+                    button.style.border = 'none';
+                    button.style.borderRadius = '8px';
+                    button.style.fontSize = '16px';
+                    button.style.fontWeight = 'bold';
+                    button.style.cursor = 'pointer';
+                    button.style.zIndex = '1000';
+                    button.textContent = 'Enter VR';
+                    
+                    button.addEventListener('click', async () => {
+                        if ('xr' in navigator) {
+                            try {
+                                const session = await navigator.xr.requestSession('immersive-vr');
+                                await renderer.xr.setSession(session);
+                                button.textContent = 'Exit VR';
+                            } catch (error) {
+                                console.warn('VR session failed:', error);
+                                button.textContent = 'VR Not Available';
+                            }
+                        } else {
+                            button.textContent = 'WebXR Not Supported';
+                        }
+                    });
+                    
+                    return button;
+                }
+            };
+        }
+    </script>
     <script>
         class ScalableVRPanoramaViewer {
             constructor() {
@@ -232,7 +275,8 @@
                 this.setupVRControls();
                 this.startPerformanceMonitoring();
                 await this.loadPanorama(0);
-                this.animate();
+                // Use WebXR-aware render loop
+                this.renderer.setAnimationLoop(this.animate.bind(this));
             }
             
             setupThreeJS(container) {
@@ -241,6 +285,12 @@
                 this.renderer = new THREE.WebGLRenderer({ antialias: true });
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
                 container.appendChild(this.renderer.domElement);
+                
+                // Enable WebXR and add VR button
+                this.renderer.xr.enabled = true;
+                document.body.appendChild(VRButton.createButton(this.renderer));
+                this.renderer.xr.addEventListener('sessionstart', () => this.onXRSessionStart());
+                this.renderer.xr.addEventListener('sessionend', () => this.onXRSessionEnd());
                 
                 this.raycaster = new THREE.Raycaster();
                 this.mouse = new THREE.Vector2();
@@ -633,32 +683,101 @@
                 }, 1000);
             }
             
-            animate() {
-                requestAnimationFrame(() => this.animate());
+            onXRSessionStart() {
+                const info = document.querySelector('.vr-info');
+                const perf = document.querySelector('.performance-panel');
+                if (info) info.style.display = 'none';
+                if (perf) perf.style.display = 'none';
+            }
+            
+            onXRSessionEnd() {
+                const info = document.querySelector('.vr-info');
+                const perf = document.querySelector('.performance-panel');
+                if (info) info.style.display = '';
+                if (perf) perf.style.display = '';
+            }
+            
+            setupXRControllers() {
+                if (!this.renderer || !this.renderer.xr) return;
                 
-                // Smooth camera interpolation
+                const buildControllerRay = (controller) => {
+                    const geometry = new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(0, 0, 0),
+                        new THREE.Vector3(0, 0, -1)
+                    ]);
+                    const material = new THREE.LineBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.8 });
+                    const line = new THREE.Line(geometry, material);
+                    line.name = 'line';
+                    line.scale.z = 5;
+                    controller.add(line);
+                };
+                
+                this.controller1 = this.renderer.xr.getController(0);
+                this.controller1.addEventListener('select', () => this.onControllerSelect(this.controller1));
+                this.scene.add(this.controller1);
+                buildControllerRay(this.controller1);
+                
+                this.controller2 = this.renderer.xr.getController(1);
+                this.controller2.addEventListener('select', () => this.onControllerSelect(this.controller2));
+                this.scene.add(this.controller2);
+                buildControllerRay(this.controller2);
+            }
+            
+            onControllerSelect(controller) {
+                if (!controller) return;
+                
+                const tempMatrix = new THREE.Matrix4();
+                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                
+                const rayOrigin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+                const rayDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
+                
+                this.raycaster.ray.origin.copy(rayOrigin);
+                this.raycaster.ray.direction.copy(rayDirection);
+                
+                const intersects = this.raycaster.intersectObjects(this.navigationButtons, true);
+                if (intersects.length > 0) {
+                    let button = intersects[0].object;
+                    while (button && !button.userData.isNavigationButton) {
+                        button = button.parent;
+                    }
+                    if (button && button.userData.isNavigationButton) {
+                        this.animateButtonClick(button);
+                        setTimeout(() => {
+                            this.loadPanorama(button.userData.targetPanorama);
+                        }, 200);
+                    }
+                }
+            }
+            
+            // Main animation loop for smooth camera interpolation and rendering
+            animate() {
+                // Smooth camera rotation interpolation
                 this.controls.lon += (this.controls.targetLon - this.controls.lon) * 0.1;
                 this.controls.lat += (this.controls.targetLat - this.controls.lat) * 0.1;
                 
-                // Update FPS
-                const now = performance.now();
-                this.performanceStats.frameCount++;
-                if (now - this.performanceStats.lastTime >= 1000) {
-                    this.performanceStats.fps = this.performanceStats.frameCount;
-                    this.performanceStats.frameCount = 0;
-                    this.performanceStats.lastTime = now;
-                }
-                
-                // Update camera
-                const lat = Math.max(-85, Math.min(85, this.controls.lat));
-                const phi = THREE.MathUtils.degToRad(90 - lat);
+                // Update camera rotation
+                const phi = THREE.MathUtils.degToRad(90 - this.controls.lat);
                 const theta = THREE.MathUtils.degToRad(this.controls.lon);
                 
-                this.camera.position.x = 0.1 * Math.sin(phi) * Math.cos(theta);
-                this.camera.position.y = 0.1 * Math.cos(phi);
-                this.camera.position.z = 0.1 * Math.sin(phi) * Math.sin(theta);
-                this.camera.lookAt(this.scene.position);
+                const x = 500 * Math.sin(phi) * Math.cos(theta);
+                const y = 500 * Math.cos(phi);
+                const z = 500 * Math.sin(phi) * Math.sin(theta);
                 
+                this.camera.lookAt(x, y, z);
+                
+                // Update performance stats
+                this.performanceStats.frameCount++;
+                const currentTime = performance.now();
+                if (currentTime >= this.performanceStats.lastTime + 1000) {
+                    this.performanceStats.fps = Math.round(
+                        (this.performanceStats.frameCount * 1000) / (currentTime - this.performanceStats.lastTime)
+                    );
+                    this.performanceStats.frameCount = 0;
+                    this.performanceStats.lastTime = currentTime;
+                }
+                
+                // Render the scene
                 this.renderer.render(this.scene, this.camera);
             }
             
