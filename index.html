@@ -1,62 +1,107 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <title>360 Photo Viewer</title>
-    <meta name="description" content="360 Photo Viewer for Quest">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <!-- A-Frame for WebVR/WebAR -->
-    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <!-- A-Frame extras for controls -->
-    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
-    <link rel="stylesheet" type="text/css" href="styles.css">
+<title>Project Title</title>
+<meta charset="utf-8">
+<meta name="viewport" content="target-densitydpi=device-dpi, width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, minimal-ui" />
+<style> @-ms-viewport { width: device-width; } </style>
+<link rel="stylesheet" href="vendor/reset.min.css">
+<link rel="stylesheet" href="style.css">
 </head>
-<body>
-    <div id="loading-screen">
-        <div class="loading-container">
-            <div class="loading-spinner"></div>
-            <div class="loading-text">Loading...</div>
-        </div>
-    </div>
+<body class="multiple-scenes ">
 
-    <a-scene embedded style="height: 100vh; width: 100vw;" 
-             vr-mode-ui="enabled: true" 
-             device-orientation-permission-ui="enabled: false"
-             background="color: #000000"
-             loading-screen="dotsColor: red; backgroundColor: black"
-             renderer="antialias: false; colorManagement: true; sortObjects: true; physicallyCorrectLights: false; maxCanvasWidth: 1920; maxCanvasHeight: 1080"
-             webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, hand-tracking">
-        
-        <a-assets>
-            <!-- Dynamic image loading will be handled by JavaScript -->
-            <img id="arrow-texture" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik01MCA1TDkwIDUwSDcwVjk1SDMwVjUwSDEwTDUwIDVaIiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSJibGFjayIgc3Ryb2tlLXdpZHRoPSIyIi8+Cjwvc3ZnPgo=" />
-        </a-assets>
+<div id="pano"></div>
 
-        <!-- 360 Photo Sphere -->
-        <a-sky id="skybox" src="#current-image" rotation="0 0 0"></a-sky>
-        
-        <!-- Navigation Arrows -->
-        <a-entity id="navigation-arrows"></a-entity>
-        
-        <!-- Camera with Quest-optimized settings -->
-        <a-entity id="camera" 
-                  camera="fov: 80; near: 0.1; far: 1000" 
-                  position="0 1.6 0" 
-                  look-controls="reverseMouseDrag: false; touchEnabled: true; magicWindowTrackingEnabled: true; pointerLockEnabled: false"
-                  wasd-controls="enabled: false"
-                  cursor="rayOrigin: mouse; fuse: false">
-        </a-entity>
-        
-        <!-- Debug info for touch events -->
-        <a-entity id="debug-info" position="0 -0.5 -2" text="value: Touch debug info; color: white; align: center; width: 2;"></a-entity>
-    </a-scene>
+<div id="sceneList">
+  <ul class="scenes">
+    
+      <a href="javascript:void(0)" class="scene" data-id="0-0_1">
+        <li class="text">0_1</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="1-0_2">
+        <li class="text">0_2</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="2-0_3">
+        <li class="text">0_3</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="3-0_4">
+        <li class="text">0_4</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="4-1_4">
+        <li class="text">1_4</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="5-1_5">
+        <li class="text">1_5</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="6-2_4">
+        <li class="text">2_4</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="7-2_5">
+        <li class="text">2_5</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="8-3_4">
+        <li class="text">3_4</li>
+      </a>
+    
+      <a href="javascript:void(0)" class="scene" data-id="9-3_5">
+        <li class="text">3_5</li>
+      </a>
+    
+  </ul>
+</div>
 
-    <div id="info-panel">
-        <div id="location-info">Current Location: <span id="current-location">Loading...</span></div>
-    </div>
+<div id="titleBar">
+  <h1 class="sceneName"></h1>
+</div>
 
-    <script src="js/config.js"></script>
-    <script src="js/navigation.js"></script>
-    <script src="js/main.js"></script>
+<a href="javascript:void(0)" id="autorotateToggle">
+  <img class="icon off" src="img/play.png">
+  <img class="icon on" src="img/pause.png">
+</a>
+
+<a href="javascript:void(0)" id="fullscreenToggle">
+  <img class="icon off" src="img/fullscreen.png">
+  <img class="icon on" src="img/windowed.png">
+</a>
+
+<a href="javascript:void(0)" id="sceneListToggle">
+  <img class="icon off" src="img/expand.png">
+  <img class="icon on" src="img/collapse.png">
+</a>
+
+<a href="javascript:void(0)" id="viewUp" class="viewControlButton viewControlButton-1">
+  <img class="icon" src="img/up.png">
+</a>
+<a href="javascript:void(0)" id="viewDown" class="viewControlButton viewControlButton-2">
+  <img class="icon" src="img/down.png">
+</a>
+<a href="javascript:void(0)" id="viewLeft" class="viewControlButton viewControlButton-3">
+  <img class="icon" src="img/left.png">
+</a>
+<a href="javascript:void(0)" id="viewRight" class="viewControlButton viewControlButton-4">
+  <img class="icon" src="img/right.png">
+</a>
+<a href="javascript:void(0)" id="viewIn" class="viewControlButton viewControlButton-5">
+  <img class="icon" src="img/plus.png">
+</a>
+<a href="javascript:void(0)" id="viewOut" class="viewControlButton viewControlButton-6">
+  <img class="icon" src="img/minus.png">
+</a>
+
+<script src="vendor/screenfull.min.js" ></script>
+<script src="vendor/bowser.min.js" ></script>
+<script src="vendor/marzipano.js" ></script>
+
+<script src="data.js"></script>
+<script src="index.js"></script>
+
 </body>
 </html>
